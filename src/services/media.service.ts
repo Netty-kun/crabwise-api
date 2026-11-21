@@ -15,6 +15,7 @@ import {
   buildObjectKey,
   buildPublicUrl,
   createPresignedUploadUrl,
+  deleteObject,
   objectExists,
 } from './s3.service';
 
@@ -213,4 +214,22 @@ export async function getMediaRecord(mediaId: string): Promise<MediaRecord> {
     throw new AppError('NOT_FOUND', 'Media not found');
   }
   return toMediaRecord(media);
+}
+
+export async function deleteMedia(userId: string, mediaId: string): Promise<void> {
+  const media = await prisma.media.findUnique({ where: { id: mediaId } });
+  if (media === null) {
+    throw new AppError('NOT_FOUND', 'Media not found');
+  }
+  if (media.userId !== userId) {
+    throw new AppError('FORBIDDEN', 'You do not own this media');
+  }
+
+  const variants = await prisma.media.findMany({ where: { variantOfId: media.id } });
+  for (const item of [media, ...variants]) {
+    await deleteObject(item.bucket, item.key);
+  }
+  await prisma.media.deleteMany({
+    where: { OR: [{ id: media.id }, { variantOfId: media.id }] },
+  });
 }
