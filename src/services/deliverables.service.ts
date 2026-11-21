@@ -101,6 +101,22 @@ function assertNoteLength(note: string): void {
 }
 
 /**
+ * Rejects malformed identifiers before they reach persistence. Identifiers are
+ * opaque, non-empty strings; anything else is a client error, not a lookup miss.
+ */
+function assertValidId(value: unknown, label: string): asserts value is string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new AppError('BAD_REQUEST', `A valid ${label} is required`);
+  }
+}
+
+function assertValidMediaIds(mediaIds: readonly unknown[]): void {
+  for (const mediaId of mediaIds) {
+    assertValidId(mediaId, 'media identifier');
+  }
+}
+
+/**
  * Verifies that a user is either a participant in the commission (client or artist)
  * or an admin, throwing an error if they are unauthorized.
  */
@@ -135,6 +151,8 @@ export async function submitDeliverable(
   artistId: string,
   input: SubmitDeliverableInput,
 ): Promise<SubmitDeliverableResult> {
+  assertValidId(commissionId, 'commission identifier');
+  assertValidId(artistId, 'artist identifier');
   const trimmedNote = input.note?.trim() ?? '';
   assertNoteLength(trimmedNote);
   const note = trimmedNote || null;
@@ -146,6 +164,7 @@ export async function submitDeliverable(
       `At most ${DELIVERABLE_MAX_MEDIA} media files can be attached to a submission`,
     );
   }
+  assertValidMediaIds(mediaIds);
 
   // Keep the deliverable, nested media links and submission side effects in
   // one transaction. Let failures escape the callback so Prisma rolls back
@@ -311,6 +330,9 @@ export async function reviewDeliverable(
   clientId: string,
   input: ReviewDeliverableInput,
 ): Promise<ReviewDeliverableResult> {
+  assertValidId(commissionId, 'commission identifier');
+  assertValidId(deliverableId, 'deliverable identifier');
+  assertValidId(clientId, 'client identifier');
   const note = input.note?.trim() ?? '';
   assertNoteLength(note);
   const maxRevisions = env.maxCommissionRevisions;
