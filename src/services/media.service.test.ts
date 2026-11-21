@@ -55,6 +55,7 @@ vi.mock('sharp', () => ({
 
 import { confirmMediaUpload, deleteMedia } from './media.service';
 import { processImage } from '../workers/media.worker';
+import { presignUploadSchema, MAX_IMAGE_SIZE_BYTES, MAX_DIGITAL_FILE_SIZE_BYTES } from '../validators/media.schemas';
 import type { Job } from 'bullmq';
 import type { ImageProcessingJobData } from '../queues/media.queue';
 
@@ -95,6 +96,98 @@ beforeEach(() => {
   objectExistsMock.mockResolvedValue(true);
   s3DownloadMock.mockResolvedValue(Buffer.from('original-image'));
   s3UploadMock.mockResolvedValue(undefined);
+});
+
+describe('presignUploadSchema limits', () => {
+  const base = {
+    type: 'IMAGE' as const,
+    mimeType: 'image/jpeg',
+    filename: 'a.jpg',
+    size: 1024,
+  };
+
+  it('accepts a file exactly at the image size limit', () => {
+    const result = presignUploadSchema.safeParse({ ...base, size: MAX_IMAGE_SIZE_BYTES });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an image one byte over the limit', () => {
+    const result = presignUploadSchema.safeParse({ ...base, size: MAX_IMAGE_SIZE_BYTES + 1 });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path.join('.'))).toContain('size');
+  });
+
+  it('accepts a digital file exactly at its limit but rejects one byte over', () => {
+    const digital = { ...base, type: 'DIGITAL_FILE' as const, mimeType: 'application/pdf' };
+    expect(presignUploadSchema.safeParse({ ...digital, size: MAX_DIGITAL_FILE_SIZE_BYTES }).success).toBe(true);
+    expect(presignUploadSchema.safeParse({ ...digital, size: MAX_DIGITAL_FILE_SIZE_BYTES + 1 }).success).toBe(false);
+  });
+
+  it('rejects zero and negative sizes', () => {
+    expect(presignUploadSchema.safeParse({ ...base, size: 0 }).success).toBe(false);
+    expect(presignUploadSchema.safeParse({ ...base, size: -1 }).success).toBe(false);
+  });
+
+  it('rejects non-integer sizes', () => {
+    expect(presignUploadSchema.safeParse({ ...base, size: 1.5 }).success).toBe(false);
+  });
+
+  it('rejects an unsupported mime type for the upload type', () => {
+    const result = presignUploadSchema.safeParse({ ...base, mimeType: 'application/pdf' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path.join('.'))).toContain('mimeType');
+  });
+
+  it('rejects mime types longer than 255 characters', () => {
+    const result = presignUploadSchema.safeParse({ ...base, mimeType: 'a'.repeat(256) });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects filenames longer than 255 characters and empty filenames', () => {
+    expect(presignUploadSchema.safeParse({ ...base, filename: 'a'.repeat(256) }).success).toBe(false);
+    expect(presignUploadSchema.safeParse({ ...base, filename: '   ' }).success).toBe(false);
+  });
+
+  it('accepts a filename of exactly 255 characters', () => {
+    expect(presignUploadSchema.safeParse({ ...base, filename: 'a'.repeat(255) }).success).toBe(true);
+  });
+
+  it('accepts omitted optional metadata (parentType and parentId)', () => {
+    expect(presignUploadSchema.safeParse(base).success).toBe(true);
+  });
+
+  it('accepts parentType and parentId provided together', () => {
+    const result = presignUploadSchema.safeParse({
+      ...base,
+      parentType: 'ARTWORK',
+      parentId: '123e4567-e89b-42d3-a456-426614174000',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects parentType without parentId and vice versa', () => {
+    expect(presignUploadSchema.safeParse({ ...base, parentType: 'ARTWORK' }).success).toBe(false);
+    expect(
+      presignUploadSchema.safeParse({
+        ...base,
+        parentId: '123e4567-e89b-42d3-a456-426614174000',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown parentType and a malformed parentId', () => {
+    expect(
+      presignUploadSchema.safeParse({
+        ...base,
+        parentType: 'USER',
+        parentId: '123e4567-e89b-42d3-a456-426614174000',
+      }).success,
+    ).toBe(false);
+    expect(
+      presignUploadSchema.safeParse({ ...base, parentType: 'ARTWORK', parentId: 'not-a-uuid' })
+        .success,
+    ).toBe(false);
+  });
 });
 
 describe('confirmMediaUpload S3 verification (#873)', () => {
